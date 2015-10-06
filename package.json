@@ -1,0 +1,22 @@
+{
+  "name": "sinkhole",
+  "version": "1.0.0",
+  "description": "tbd",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KenanSulayman/sinkhole.git"
+  },
+  "author": "Kenan Sulayman",
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/KenanSulayman/sinkhole/issues"
+  },
+  "homepage": "https://github.com/KenanSulayman/sinkhole#readme",
+  "dependencies": {
+    "pcap": "kenansulayman/node_pcap"
+  }
+}
