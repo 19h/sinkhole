@@ -44,12 +44,14 @@ let a2i = (arr, bm) => {
     return ip;
 };
 
+var blacklist = {};
+
 let blockSubnet = () => {
 
 };
 
-let blockHost = () => {
-    // not implemented
+let blockHost = (ip) => {
+    blacklist[ip] = true;
 };
 
 let lLbuf = config.host.split('.').map((i) => Number(i));
