@@ -17,6 +17,7 @@
   },
   "homepage": "https://github.com/KenanSulayman/sinkhole#readme",
   "dependencies": {
-    "pcap": "kenansulayman/node_pcap"
+    "pcap": "kenansulayman/node_pcap",
+    "hyperlevel": "^1.0.0"
   }
 }
