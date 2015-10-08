@@ -116,7 +116,7 @@ pcap_session.on('packet', (raw) => {
     if (metahmap[sub].length > 20) {
         if (subnetBlacklist[sub]) return;
 
-        console.log('Detected netscan: ', sub, Object.keys(hmap[sub]).filter((i) => hmap[sub].hasOwnProperty(i)).join(','));
+        console.log('Detected netscan: ', sub, Object.keys(hmap[sub]).filter((i) => !isNaN(i)).join(','));
 
         blockSubnet(sub);
     }
