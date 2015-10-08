@@ -116,7 +116,7 @@ pcap_session.on('packet', (raw) => {
 
         let ips = Object.keys(hmap[sub]);
             ips = ips.filter((i) => !isNaN(i)).join(',');
-            ips = ips.map((i) => '[' + hmap[sub][id].join(, ) + ']')
+            ips = ips.map((i) => '[' + hmap[sub][id].join(', ') + ']')
 
         console.log('Detected netscan: ', sub, ips.join(', '));
 
