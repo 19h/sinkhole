@@ -44,14 +44,31 @@ let a2i = (arr, bm) => {
     return ip;
 };
 
-var blacklist = {};
+var hostBlacklist = {},
+    subnetBlacklist = {};
 
-let blockSubnet = () => {
+let blockSubnet = (subnet) => {
+    subnetBlacklist[subnet] = true;
 
+    subnet = subnet.split('.').slice(0, 2).join('.');
+
+    console.log("Executing: iptables -A INPUT -p all -m iprange --src-range " + subnet + ".0.0-" + subnet + ".255.255 -j DROP");
+    console.log("Executing: iptables -A FORWARD -p all -m iprange --src-range " + subnet + ".0.0-" + subnet + ".255.255 -j DROP");
+    console.log("Executing: iptables -A OUTPUT -p all -m iprange --src-range " + subnet + ".0.0-" + subnet + ".255.255 -j DROP");
+
+    setTimeout(() => {
+        delete subnetBlacklist[subnet];
+    }, 10000);//24 * 3600);
 };
 
 let blockHost = (ip) => {
-    blacklist[ip] = true;
+    hostBlacklist[ip] = true;
+
+    console.log("Executing: iptables -I OUTPUT -s " + ip + " -j DROP");
+
+    setTimeout(() => {
+        delete hostBlacklist[ip];
+    }, 10000);//24 * 3600);
 };
 
 let lLbuf = config.host.split('.').map((i) => Number(i));
@@ -99,12 +116,20 @@ pcap_session.on('packet', (raw) => {
 
     // decide
     if (metahmap[sub].length > 15) {
+        if (subnetBlacklist[sub]) return;
+
         console.log('Detected netscan: ', sub);
+
+        blockSubnet(sub);
     }
 
     // individual host
     if (hmap[sub][id].length > 10) {
+        if (hostBlacklist[sub + '.' + id]) return;
+
         console.log('Detected portscan: ', sub + '.' + id, hmap[sub][id].join(', '));
+
+        blockHost(ip);
     }
 
     clearTimeout(hmap[sub].timer);
