@@ -129,7 +129,7 @@ pcap_session.on('packet', (raw) => {
 
         console.log('Detected portscan: ', sub + '.' + id, hmap[sub][id].join(', '));
 
-        blockHost(ip);
+        blockHost(sub + '.' + id);
     }
 
     clearTimeout(hmap[sub].timer);
