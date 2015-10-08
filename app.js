@@ -115,7 +115,7 @@ pcap_session.on('packet', (raw) => {
         if (subnetBlacklist[sub]) return;
 
         let ips = Object.keys(hmap[sub]);
-            ips = ips.filter((i) => !isNaN(i)).join(',');
+            ips = ips.filter((i) => !isNaN(i));
             ips = ips.map((i) => '[' + hmap[sub][id].join(', ') + ']')
 
         console.log('Detected netscan: ', sub, ips.join(', '));
