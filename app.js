@@ -56,7 +56,7 @@ let blockSubnet = (subnet) => {
 
     setTimeout(() => {
         delete subnetBlacklist[subnet];
-    }, 10000);//24 * 3600);
+    }, 24 * 3600);
 };
 
 let blockHost = (ip) => {
@@ -66,7 +66,7 @@ let blockHost = (ip) => {
 
     setTimeout(() => {
         delete hostBlacklist[ip];
-    }, 10000);//24 * 3600);
+    }, 24 * 3600);
 };
 
 let lLbuf = config.host.split('.').map((i) => Number(i));
@@ -113,16 +113,16 @@ pcap_session.on('packet', (raw) => {
     }
 
     // decide
-    if (metahmap[sub].length > 15) {
+    if (metahmap[sub].length > 20) {
         if (subnetBlacklist[sub]) return;
 
-        console.log('Detected netscan: ', sub);
+        console.log('Detected netscan: ', sub, Object.keys(hmap[sub]).map((i) => hmap[sub].hasOwnProperty(i)).join(','));
 
         blockSubnet(sub);
     }
 
     // individual host
-    if (hmap[sub][id].length > 10) {
+    if (hmap[sub][id].length > 20) {
         if (hostBlacklist[sub + '.' + id]) return;
 
         console.log('Detected portscan: ', sub + '.' + id, hmap[sub][id].join(', '));
