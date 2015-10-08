@@ -50,11 +50,9 @@ var hostBlacklist = {},
 let blockSubnet = (subnet) => {
     subnetBlacklist[subnet] = true;
 
-    subnet = subnet.split('.').slice(0, 2).join('.');
-
-    console.log("Executing: iptables -A INPUT -p all -m iprange --src-range " + subnet + ".0.0-" + subnet + ".255.255 -j DROP");
-    console.log("Executing: iptables -A FORWARD -p all -m iprange --src-range " + subnet + ".0.0-" + subnet + ".255.255 -j DROP");
-    console.log("Executing: iptables -A OUTPUT -p all -m iprange --src-range " + subnet + ".0.0-" + subnet + ".255.255 -j DROP");
+    console.log("Executing: iptables -A INPUT -p all -m iprange --src-range " + subnet + ".0-" + subnet + ".255.255 -j DROP");
+    console.log("Executing: iptables -A FORWARD -p all -m iprange --src-range " + subnet + ".0-" + subnet + ".255.255 -j DROP");
+    console.log("Executing: iptables -A OUTPUT -p all -m iprange --src-range " + subnet + ".0-" + subnet + ".255.255 -j DROP");
 
     setTimeout(() => {
         delete subnetBlacklist[subnet];
@@ -136,8 +134,6 @@ pcap_session.on('packet', (raw) => {
     clearTimeout(hmap[sub][id].timer);
 
     hmap[sub][id].timer = setTimeout(() => {
-        console.log('Removing ' + sub + '.' + id + ' due to inactivity.');
-
         clearTimeout(hmap[sub][id].timer);
 
         delete hmap[sub][id];
@@ -146,8 +142,6 @@ pcap_session.on('packet', (raw) => {
     }, config.eTTL);
 
     hmap[sub].timer = setTimeout(() => {
-        console.log('Removing ' + sub + ' due to inactivity.');
-
         delete hmap[sub];
         delete metahmap[sub];
     }, config.eTTL);
