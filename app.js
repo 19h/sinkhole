@@ -31,13 +31,13 @@ let a2i = (arr, bm) => {
 
     if (!bm || bm >= 8)
         ip += arr[0] * (1 << 24);
-    
+
     if (!bm || bm >= 16)
         ip += arr[1] * (1 << 16);
-    
+
     if (!bm || bm >= 24)
         ip += arr[2] * (1 << 8);
-    
+
     if (!bm || bm === 32)
         ip += arr[3];
 
@@ -56,7 +56,7 @@ let blockHost = (ip) => {
 
 let lLbuf = config.host.split('.').map((i) => Number(i));
 
-let hmap = {};
+let hmap = {}; let metahmap = {};
 
 pcap_session.on('packet', (raw) => {
     let packet = pcap.decode.packet(raw);
@@ -82,8 +82,14 @@ pcap_session.on('packet', (raw) => {
 
     // initialize
     hmap[sub] = hmap[sub] || {};
+    metahmap[sub] = metahmap[sub] || { length: 0 };
+
+    if (!hmap[sub][id]) {
+        metahmap[sub].length++;
+    }
+
     hmap[sub][id] = hmap[sub][id] || [];
-    
+
     // add port & host
     if (!~hmap[sub][id].indexOf(map.dest.port)) {
         hmap[sub][id].push(map.dest.port);
@@ -92,9 +98,9 @@ pcap_session.on('packet', (raw) => {
     }
 
     // decide
-    //if (hmap[sub].length > 4) {
-        //console.log('Detected netscan: ', sub);
-    //}
+    if (metahmap[sub].length > 15) {
+        console.log('Detected netscan: ', sub);
+    }
 
     // individual host
     if (hmap[sub][id].length > 10) {
@@ -110,12 +116,15 @@ pcap_session.on('packet', (raw) => {
         clearTimeout(hmap[sub][id].timer);
 
         delete hmap[sub][id];
+
+        metahmap[sub].length--;
     }, config.eTTL);
 
     hmap[sub].timer = setTimeout(() => {
         console.log('Removing ' + sub + ' due to inactivity.');
 
         delete hmap[sub];
+        delete metahmap[sub];
     }, config.eTTL);
 });
 
