@@ -50,8 +50,6 @@ var hostBlacklist = {},
 let blockSubnet = (subnet) => {
     subnetBlacklist[subnet] = true;
 
-    console.log("Executing: iptables -A INPUT -p all -m iprange --src-range " + subnet + ".0-" + subnet + ".255.255 -j DROP");
-    console.log("Executing: iptables -A FORWARD -p all -m iprange --src-range " + subnet + ".0-" + subnet + ".255.255 -j DROP");
     console.log("Executing: iptables -A OUTPUT -p all -m iprange --src-range " + subnet + ".0-" + subnet + ".255.255 -j DROP");
 
     setTimeout(() => {
@@ -116,7 +114,11 @@ pcap_session.on('packet', (raw) => {
     if (metahmap[sub].length > 20) {
         if (subnetBlacklist[sub]) return;
 
-        console.log('Detected netscan: ', sub, Object.keys(hmap[sub]).filter((i) => !isNaN(i)).join(','));
+        let ips = Object.keys(hmap[sub]);
+            ips = ips.filter((i) => !isNaN(i)).join(',');
+            ips = ips.map((i) => '[' + hmap[sub][id].join(, ) + ']')
+
+        console.log('Detected netscan: ', sub, ips.join(', '));
 
         blockSubnet(sub);
     }
