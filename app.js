@@ -1,5 +1,7 @@
 'use strict';
 
+let childProcess = require('child_process');
+
 let config = require('./config');
 
 try {
@@ -10,22 +12,32 @@ try {
 
 let pcap = require('pcap');
 
-let hyper = null;
+let level = null;
 
 try {
-    hyper = require('hyperlevel');
+    level = require('hyperlevel');
 } catch(e) {
-    hyper = require('level');
+    level = require('level');
 }
 
 let bloom = require('bloem').Bloem;
 
 /* datastores */
 // blacklist persistence
-let db = hyper('./db');
+let db = level('./db', {
+    valueEncoding: 'json'
+});
+
+let subnetPrefix = '\xFFsubnet\xFF',
+    hostPrefix = '\xFFhost\xFF';
 
 // bloomfilter for whitelist
 let wl = new bloom(1024 * 128, 2);
+
+let sentinel = (tgt) => {
+    //return childProcess.spawn('tcpkill', ['-9', tgt])
+    console.log('tcpkill', ['-9', tgt]);
+};
 
 let init = () => {
     let pcap_session = pcap.createSession('', 'tcp');
@@ -59,7 +71,7 @@ let init = () => {
         return ip;
     };
 
-    var hostBlacklist = {},
+    let hostBlacklist = {},
         subnetBlacklist = {};
 
     let blockSubnet = (subnet) => {
@@ -67,9 +79,16 @@ let init = () => {
 
         console.log("Executing: iptables -A OUTPUT -p all -m iprange --src-range " + subnet + ".0-" + subnet + ".255.255 -j DROP");
 
-        setTimeout(() => {
-            delete subnetBlacklist[subnet];
-        }, 24 * 3600);
+        db.put(subnetPrefix + subnet, {
+            ts: Date.now(),
+            sn: subnet
+        }, () => {
+            setTimeout(() => {
+                db.del(subnetPrefix + subnet, () => {
+                    delete subnetBlacklist[subnet];
+                });
+            }, 24 * 3600);
+        });
     };
 
     let blockHost = (ip) => {
@@ -77,9 +96,16 @@ let init = () => {
 
         console.log("Executing: iptables -I OUTPUT -s " + ip + " -j DROP");
 
-        setTimeout(() => {
-            delete hostBlacklist[ip];
-        }, 24 * 3600);
+        db.put(hostPrefix + ip, {
+            ts: Date.now(),
+            ip: ip
+        }, () => {
+            setTimeout(() => {
+                db.del(hostPrefix + ip, () => {
+                    delete hostBlacklist[ip];
+                });
+            }, 24 * 3600);
+        });
     };
 
     let lLbuf = config.host.split('.').map((i) => Number(i));
@@ -107,6 +133,7 @@ let init = () => {
 
         let sub = map.dest.host.slice(0, 3).join('.');
         let id = map.dest.host[3];
+        let ip = map.dest.host.join('.');
 
         // initialize
         hmap[sub] = hmap[sub] || {};
@@ -140,11 +167,13 @@ let init = () => {
 
         // individual host
         if (hmap[sub][id].length > 20) {
-            if (hostBlacklist[sub + '.' + id]) return;
+            if (hostBlacklist[ip]) return;
 
-            console.log('Detected portscan: ', sub + '.' + id, hmap[sub][id].join(', '), wl.has(sub + '.' + id));
+            let ignored = wl.has(ip);
 
-            blockHost(sub + '.' + id);
+            console.log('Detected portscan' + (ignored ? ', ignoring' : '') + ': ', ip, hmap[sub][id].join(', '));
+
+            blockHost(ip);
         }
 
         clearTimeout(hmap[sub].timer);
@@ -167,29 +196,65 @@ let init = () => {
     //setInterval(() => console.log(hmap), 2000);
 };
 
-/* Aggregate IPs */
-let http = require('http');
+let ingestTorConsensus = () => {
+    /* Aggregate IPs */
+    let http = require('http');
 
-http.request('http://r3.geoca.st:9030/tor/status-vote/current/consensus', (sock) => {
-    let data = Buffer(0);
+    http.request('http://r3.geoca.st:9030/tor/status-vote/current/consensus', (sock) => {
+        let data = Buffer(0);
 
-    sock.on('data', (chunk) => {
-        data = Buffer.concat([data, chunk]);
-    });
+        sock.on('data', (chunk) => {
+            console.log(chunk)
 
-    sock.on('end', () => {
-        data = data
-        // convert buffer to string
-        .toString()
-        // split into lines
-        .split("\n")
-        // select lines starting with 'r '
-        .filter((i) => i[0] === 'r' && i[1] === ' ')
-        // extract IP in line
-        .map((i) => i.split(' ')[6])
-        // feed into bloom filter
-        .forEach((i) => wl.add(i));
+            data = Buffer.concat([data, chunk]);
+        });
 
-        init();
-    })
-}).end();
+        sock.on('end', () => {
+            data = data
+            // convert buffer to string
+            .toString()
+            // split into lines
+            .split("\n")
+            // select lines starting with 'r '
+            .filter((i) => i[0] === 'r' && i[1] === ' ')
+            // extract IP in line
+            .map((i) => i.split(' ')[6])
+            // feed into bloom filter
+            .forEach((i) => wl.add(i));
+
+            init();
+        })
+    }).end();
+};
+
+db.createReadStream()
+.on('data', (item) => {
+    console.log(item);
+
+    let sinkhole = null;
+    let op = null, ttl = null;
+
+    if (!item.key.indexOf(hostPrefix)) {
+        op = item.key.split(hostPrefix).pop();
+        op = 'dst ' + op;
+    }
+
+    if (!item.key.indexOf(subnetPrefix)) {
+        op = item.key.split(subnetPrefix).pop();
+        op = 'dst net ' + op + '/24'
+    }
+
+    ttl = (item.value - Date.now()) + config.sinkholeTTL;
+
+    console.log(ttl);
+
+    if (ttl && ttl < 0)
+        return db.del(item.key);
+
+    if (op && ttl) {
+        sentinel(op, ttl);
+    }
+})
+.on('end', () => {
+    ingestTorConsensus();
+});
