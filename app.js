@@ -8,7 +8,14 @@ try {
     console.log("Using default configuration! Copy config.js to config.local.js.");
 }
 
-let hyper = require('hyperlevel');
+let hyper = null;
+
+try {
+    hyper = require('hyperlevel');
+} catch(e) {
+    hyper = require('level');
+}
+
 let db = hyper('./db');
 
 var pcap = require('pcap'),
