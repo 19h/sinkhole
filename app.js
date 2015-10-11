@@ -1,6 +1,8 @@
 'use strict';
 
 let childProcess = require('child_process');
+let http = require('http');
+let os = require('os');
 
 let config = require('./config');
 
@@ -34,9 +36,26 @@ let subnetPrefix = '\xFFsubnet\xFF',
 // bloomfilter for whitelist
 let wl = new bloom(1024 * 128, 2);
 
-let sentinel = (tgt) => {
-    //return childProcess.spawn('tcpkill', ['-9', tgt])
-    console.log('tcpkill', ['-9', tgt]);
+/* feed local addresses into bloom filter */
+let fi = os.networkInterfaces();
+
+// flatten local interfaces
+fi = Object.keys(fi)
+.map((i) => fi[i].map((x) => x.address))
+.reduce(((a, b) => a.concat(b)), []);
+
+// learn local interfaces
+fi.forEach((i) => wl.add(i));
+
+let sentinel = (dst, ttl, isSubnet) => {
+    if (isSubnet) {
+        dst = 'dst net ' + dst + '/24';
+    } else {
+        dst = 'dst ';
+    }
+
+    //return childProcess.spawn('tcpkill', ['-9', dst])
+    console.log('tcpkill', ['-9', dst]);
 };
 
 let init = () => {
@@ -108,7 +127,7 @@ let init = () => {
         });
     };
 
-    let lLbuf = config.host.split('.').map((i) => Number(i));
+    let lLbuf = config.host ? config.host.split('.').map((i) => Number(i)) : null;
 
     let hmap = {}; let metahmap = {};
 
@@ -117,7 +136,7 @@ let init = () => {
 
         let data = packet.payload.payload;
 
-        if (beql(data.daddr.addr, lLbuf))
+        if (lLbuf !== null && beql(data.daddr.addr, lLbuf))
             return false;
 
         let map = {
@@ -192,43 +211,106 @@ let init = () => {
             delete metahmap[sub];
         }, config.eTTL);
     });
-
-    //setInterval(() => console.log(hmap), 2000);
 };
 
+let learnTorConsensus = (data) => {
+    let hosts = {l:1}, subnets = {l:1};
+
+    // feed into bloom filter
+    data.forEach((i) => {
+        // learn IP
+        wl.add(i);
+
+        hosts[i] ? ++hosts[i] : ((++hosts.l), (hosts[i] = 1));
+
+        // learn /24
+        let subnet = i.split('.').slice(0, 3).join('.');
+
+        wl.add(subnet);
+
+        subnets[subnet] ? ++subnets[subnet] : ((++subnets.l), (subnets[subnet] = 1));
+    });
+
+    console.log(Object.keys(subnets).sort((s1, s2) => subnets[s2] - subnets[s1]).slice(0, 10))
+
+    console.log("Learned about " + hosts.l + " hosts and " + subnets.l + " subnets.");
+
+    hosts = undefined;
+    subnets = undefined;
+
+    init();
+};
+
+/* feed tor relays into bloom filter */
 let ingestTorConsensus = () => {
-    /* Aggregate IPs */
-    let http = require('http');
+    let start = Date.now();
 
-    http.request('http://r3.geoca.st:9030/tor/status-vote/current/consensus', (sock) => {
-        let data = Buffer(0);
+    process.stdout.write("Downloading Tor consensus ..");
 
-        sock.on('data', (chunk) => {
-            console.log(chunk)
+    let queueConsensusUpdate = (ttl) => {
+        let restTTL = config.consensusMaxAge - (Date.now() - ttl);
 
-            data = Buffer.concat([data, chunk]);
-        });
+        setTimeout(updateConsensus, restTTL < 0 ? 0 : restTTL);
+    }
 
-        sock.on('end', () => {
-            data = data
-            // convert buffer to string
-            .toString()
-            // split into lines
-            .split("\n")
-            // select lines starting with 'r '
-            .filter((i) => i[0] === 'r' && i[1] === ' ')
-            // extract IP in line
-            .map((i) => i.split(' ')[6])
-            // feed into bloom filter
-            .forEach((i) => wl.add(i));
+    let updateConsensus = () => {
+        http.request('http://r3.geoca.st:9030/tor/status-vote/current/consensus', (sock) => {
+            let data = Buffer(0), i = 0;
 
-            init();
-        })
-    }).end();
+            sock.on('data', (chunk) => {
+                i++ % 25 || process.stdout.write(".");
+
+                data = Buffer.concat([data, chunk]);
+            });
+
+            sock.on('end', () => {
+                process.stdout.write(" done (" + (Date.now() - start) + "ms).\n");
+
+                data = data
+                // convert buffer to string
+                .toString()
+                // split into lines
+                .split("\n")
+                // select lines starting with 'r '
+                .filter((i) => i[0] === 'r' && i[1] === ' ')
+                // extract IP in line
+                .map((i) => i.split(' ')[6]);
+
+                db.put('\xFFconsensus', {
+                    data: data,
+                    ts: Date.now()
+                }, function () {
+                    queueConsensusUpdate(Date.now());
+
+                    learnTorConsensus(data);
+                })
+            });
+
+            sock.on('error', () => {
+                process.stdout.write(" failed, retrying.\n");
+                
+                ingestTorConsensus();
+            })
+        }).end();
+    };
+
+    db.get('\xFFconsensus', (err, data) => {
+        if (err || (data && (Date.now() - data.ts) > config.consensusMaxAge))
+            return updateConsensus();
+
+        queueConsensusUpdate(data.ts);
+
+        console.log("NOT IMPLEMENTED");
+    });
 };
 
+/* feed history into bloom filter */
 db.createReadStream()
 .on('data', (item) => {
+    // skip non-host&subnet keys
+    if (item.key.indexOf('\xFFhost') && item.key.indexOf('\xFFsubnet'))
+        return;
+
     console.log(item);
 
     let sinkhole = null;
@@ -236,23 +318,20 @@ db.createReadStream()
 
     if (!item.key.indexOf(hostPrefix)) {
         op = item.key.split(hostPrefix).pop();
-        op = 'dst ' + op;
     }
 
     if (!item.key.indexOf(subnetPrefix)) {
         op = item.key.split(subnetPrefix).pop();
-        op = 'dst net ' + op + '/24'
     }
 
-    ttl = (item.value - Date.now()) + config.sinkholeTTL;
-
-    console.log(ttl);
+    ttl = (item.value.ts - Date.now()) + config.sinkholeTTL;
 
     if (ttl && ttl < 0)
         return db.del(item.key);
 
     if (op && ttl) {
-        sentinel(op, ttl);
+        /* TOOD: what if this key is whitelisted since last ban? */
+        sentinel(op, ttl, isSubnet);
     }
 })
 .on('end', () => {
