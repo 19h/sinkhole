@@ -12,6 +12,8 @@ try {
     console.log("Using default configuration! Copy config.js to config.local.js.");
 }
 
+let dry_run = process.env['DRY_RUN'];
+
 let pcap = require('pcap');
 
 let level = null;
@@ -51,11 +53,22 @@ let sentinel = (dst, ttl, isSubnet) => {
     if (isSubnet) {
         dst = 'dst net ' + dst + '/24';
     } else {
-        dst = 'dst ';
+        dst = 'dst ' + dst;
     }
 
-    //return childProcess.spawn('tcpkill', ['-9', dst])
-    console.log('tcpkill', ['-9', dst]);
+    if (dry_run) {
+        console.log('tcpkill', ['-9', dst]);
+    } else {
+        let sinkhole = childProcess.spawn('tcpkill', ['-9', dst]);
+    }
+
+    setTimeout(() => {
+        if (dry_run) {
+            console.log('> SIGTERM tckill -9 dst ' + dst);
+        } else {
+            sinkhole.kill('SIGTERM');
+        }
+    }, ttl)
 };
 
 let init = () => {
@@ -96,34 +109,34 @@ let init = () => {
     let blockSubnet = (subnet) => {
         subnetBlacklist[subnet] = true;
 
-        console.log("Executing: iptables -A OUTPUT -p all -m iprange --src-range " + subnet + ".0-" + subnet + ".255.255 -j DROP");
+        console.log("Banning " + subnet + ".0/24..");
 
         db.put(subnetPrefix + subnet, {
             ts: Date.now(),
             sn: subnet
         }, () => {
-            setTimeout(() => {
-                db.del(subnetPrefix + subnet, () => {
-                    delete subnetBlacklist[subnet];
+            sentinel(subnet, config.sinkholeTTL, true, () => {
+                db.del(hostPrefix + ip, () => {
+                    delete hostBlacklist[ip];
                 });
-            }, 24 * 3600);
+            });
         });
     };
 
     let blockHost = (ip) => {
         hostBlacklist[ip] = true;
 
-        console.log("Executing: iptables -I OUTPUT -s " + ip + " -j DROP");
+        console.log("Banning " + ip + "..");
 
         db.put(hostPrefix + ip, {
             ts: Date.now(),
             ip: ip
         }, () => {
-            setTimeout(() => {
+            sentinel(ip, config.sinkholeTTL, false, () => {
                 db.del(hostPrefix + ip, () => {
                     delete hostBlacklist[ip];
                 });
-            }, 24 * 3600);
+            });
         });
     };
 
@@ -186,11 +199,11 @@ let init = () => {
 
         // individual host
         if (hmap[sub][id].length > 20) {
-            if (hostBlacklist[ip]) return;
+            /* already blocked || explicitly filtered || in bloom filter */
+            if (hostBlacklist[ip] || ~config.hostWhitelist.indexOf(ip) || wl.has(ip))
+                return;
 
-            let ignored = wl.has(ip);
-
-            console.log('Detected portscan' + (ignored ? ', ignoring' : '') + ': ', ip, hmap[sub][id].join(', '));
+            console.log('Detected portscan: ', ip, hmap[sub][id].join(', '));
 
             blockHost(ip);
         }
@@ -231,7 +244,8 @@ let learnTorConsensus = (data) => {
         subnets[subnet] ? ++subnets[subnet] : ((++subnets.l), (subnets[subnet] = 1));
     });
 
-    console.log(Object.keys(subnets).sort((s1, s2) => subnets[s2] - subnets[s1]).slice(0, 10))
+    // Fun: (top 10 subnets)
+    // Object.keys(subnets).sort((s1, s2) => subnets[s2] - subnets[s1]).slice(0, 10)
 
     console.log("Learned about " + hosts.l + " hosts and " + subnets.l + " subnets.");
 
@@ -279,7 +293,7 @@ let ingestTorConsensus = () => {
                 db.put('\xFFconsensus', {
                     data: data,
                     ts: Date.now()
-                }, function () {
+                }, () => {
                     queueConsensusUpdate(Date.now());
 
                     learnTorConsensus(data);
@@ -287,7 +301,7 @@ let ingestTorConsensus = () => {
             });
 
             sock.on('error', () => {
-                process.stdout.write(" failed, retrying.\n");
+                process.stdout.write(" failed, retrying..\n");
                 
                 ingestTorConsensus();
             })
@@ -300,7 +314,9 @@ let ingestTorConsensus = () => {
 
         queueConsensusUpdate(data.ts);
 
-        console.log("NOT IMPLEMENTED");
+        console.log(" done (using valid cache).");
+
+        learnTorConsensus(data.data);
     });
 };
 
@@ -313,7 +329,7 @@ db.createReadStream()
 
     console.log(item);
 
-    let sinkhole = null;
+    let isSubnet = null;
     let op = null, ttl = null;
 
     if (!item.key.indexOf(hostPrefix)) {
@@ -321,12 +337,13 @@ db.createReadStream()
     }
 
     if (!item.key.indexOf(subnetPrefix)) {
+        isSubnet = true;
         op = item.key.split(subnetPrefix).pop();
     }
 
     ttl = (item.value.ts - Date.now()) + config.sinkholeTTL;
 
-    if (ttl && ttl < 0)
+    if (~config.hostWhitelist.indexOf(op) || (ttl && ttl < 0))
         return db.del(item.key);
 
     if (op && ttl) {
